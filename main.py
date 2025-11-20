@@ -4,8 +4,12 @@ import json
 import base64
 import os
 import traceback
+import sys
 
-def main(page: ft.Page):
+# --- Aquí va la versión completa de tu app (la última que usamos),
+# renombrada a app_main para envolverla en un try/except.
+# He tomado la versión previa que te di y la incluyo como app_main.
+def app_main(page: ft.Page):
     # --- CONFIGURACIÓN DE LA VENTANA ---
     page.title = "Gestor de Precios"
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -95,19 +99,16 @@ def main(page: ft.Page):
 
             for idx, item in enumerate(datos):
                 nombre_item = (item.get("nombre") or "").strip()
-                # Si está vacío el nombre, saltarlo
                 if not nombre_item:
                     skipped += 1
                     continue
 
-                # price safe
                 try:
                     precio_val = float(item.get("precio", 0) or 0)
                 except Exception:
                     precio_val = 0.0
 
                 ruta_final = item.get("img_path", "") or ""
-                # Reconstruir foto desde el código Base64 (si existe)
                 if item.get("img_base64"):
                     nombre_limpio = "".join(x for x in nombre_item if x.isalnum()) or "img"
                     nueva_ruta = os.path.join(carpeta_fotos, f"{nombre_limpio}_{idx}.jpg")
@@ -118,12 +119,10 @@ def main(page: ft.Page):
                     except Exception as ex:
                         print("Error escribiendo imagen importada:", ex)
 
-                # Buscar producto por nombre (match para update). Ajusta si prefieres otro criterio.
                 c.execute("SELECT id, precio, img FROM productos WHERE nombre=?", (nombre_item,))
                 existing = c.fetchone()
                 if existing:
                     prod_id, prod_precio, prod_img = existing
-                    # Decidir campos a actualizar: actualiza precio y la img si ruta_final no está vacío (si está vacío mantiene la anterior)
                     new_price = precio_val
                     new_img = ruta_final if ruta_final else prod_img
                     try:
@@ -134,10 +133,8 @@ def main(page: ft.Page):
                         skipped += 1
                 else:
                     try:
-                        c.execute(
-                            "INSERT INTO productos (nombre, precio, img) VALUES (?, ?, ?)",
-                            (nombre_item, precio_val, ruta_final),
-                        )
+                        c.execute("INSERT INTO productos (nombre, precio, img) VALUES (?, ?, ?)",
+                                  (nombre_item, precio_val, ruta_final))
                         inserted += 1
                     except Exception as ex:
                         print("Error insertando producto:", ex)
@@ -170,11 +167,8 @@ def main(page: ft.Page):
 
     # --- UI: Variables y Elementos ---
     lista_productos_view = ft.Column()
-    tasa_cambio = ft.TextField(
-        label="Tasa BCV", value="40", keyboard_type=ft.KeyboardType.NUMBER, width=100, text_align="center"
-    )
+    tasa_cambio = ft.TextField(label="Tasa BCV", value="40", keyboard_type=ft.KeyboardType.NUMBER, width=100, text_align="center")
 
-    # auxiliar para referenciar controles del diálogo desde el callback del picker
     globals_dialog_refs = {}
 
     # --- FUNCIÓN PRINCIPAL: CÁLCULOS ---
@@ -214,61 +208,27 @@ def main(page: ft.Page):
             c.execute(query, (f"%{busqueda}%",))
             items = c.fetchall()
             if not items:
-                lista_productos_view.controls.append(
-                    ft.Text("No hay productos. Agrega uno con el botón (+)", color="grey")
-                )
+                lista_productos_view.controls.append(ft.Text("No hay productos. Agrega uno con el botón (+)", color="grey"))
             else:
                 for row in items:
                     id_p, nombre, precio, img = row
 
                     lbl_res = ft.Text("Total: $0.00 | Bs: 0.00", size=12)
-                    txt_cant = ft.TextField(
-                        label="#",
-                        width=60,
-                        height=40,
-                        content_padding=5,
-                        keyboard_type=ft.KeyboardType.NUMBER,
-                    )
-
+                    txt_cant = ft.TextField(label="#", width=60, height=40, content_padding=5, keyboard_type=ft.KeyboardType.NUMBER)
                     txt_cant.on_change = lambda e, p=precio, l=lbl_res, t=txt_cant: calcular(e, p, l, t)
 
                     src_img = img if img else "https://via.placeholder.com/150"
-                    imagen_widget = ft.Image(
-                        src=src_img,
-                        width=70,
-                        height=70,
-                        fit=ft.ImageFit.COVER,
-                        border_radius=5,
-                        error_content=ft.Icon(ft.icons.IMAGE_NOT_SUPPORTED),
-                    )
+                    imagen_widget = ft.Image(src=src_img, width=70, height=70, fit=ft.ImageFit.COVER, border_radius=5,
+                                             error_content=ft.Icon(ft.icons.IMAGE_NOT_SUPPORTED))
 
-                    card = ft.Card(
-                        content=ft.Container(
-                            padding=10,
-                            content=ft.Column(
-                                [
-                                    ft.Row(
-                                        [
-                                            imagen_widget,
-                                            ft.Column(
-                                                [
-                                                    ft.Text(nombre, weight=ft.FontWeight.BOLD, size=16),
-                                                    ft.Text(f"Ref: ${precio}", color="blue", weight=ft.FontWeight.BOLD),
-                                                ],
-                                                expand=True,
-                                            ),
-                                            ft.IconButton(
-                                                icon=ft.icons.DELETE,
-                                                icon_color="red",
-                                                on_click=lambda e, i=id_p: borrar_producto(i),
-                                            ),
-                                        ]
-                                    ),
-                                    ft.Row([txt_cant, lbl_res], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                                ]
-                            ),
-                        )
-                    )
+                    card = ft.Card(content=ft.Container(padding=10, content=ft.Column([
+                        ft.Row([imagen_widget,
+                                ft.Column([ft.Text(nombre, weight=ft.FontWeight.BOLD, size=16),
+                                           ft.Text(f"Ref: ${precio}", color="blue", weight=ft.FontWeight.BOLD)], expand=True),
+                                ft.IconButton(icon=ft.icons.DELETE, icon_color="red", on_click=lambda e, i=id_p: borrar_producto(i))
+                               ]),
+                        ft.Row([txt_cant, lbl_res], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+                    ])))
                     lista_productos_view.controls.append(card)
         except Exception as ex:
             print("Error cargando productos:", ex)
@@ -323,16 +283,7 @@ def main(page: ft.Page):
 
         dlg = ft.AlertDialog(
             title=ft.Text("Nuevo Producto"),
-            content=ft.Column(
-                [
-                    vn,
-                    vp,
-                    ft.Row([vi, btn_select_img, btn_clear_img], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    err_text,
-                ],
-                height=220,
-                tight=True,
-            ),
+            content=ft.Column([vn, vp, ft.Row([vi, btn_select_img, btn_clear_img], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), err_text], height=220, tight=True),
             actions=[ft.TextButton("Guardar", on_click=guardar), ft.TextButton("Cancelar", on_click=lambda e: close_dlg())],
         )
 
@@ -350,31 +301,75 @@ def main(page: ft.Page):
         bgcolor=ft.colors.BLUE_GREY_900,
         color="white",
         actions=[
-            ft.IconButton(
-                icon=ft.icons.UPLOAD, tooltip="Exportar Backup", on_click=lambda e: file_picker.save_file(file_name="backup_tienda.json")
-            ),
-            ft.IconButton(
-                icon=ft.icons.DOWNLOAD, tooltip="Importar Backup", on_click=lambda e: file_picker.pick_files(allow_multiple=False, allowed_extensions=["json"])
-            ),
+            ft.IconButton(icon=ft.icons.UPLOAD, tooltip="Exportar Backup", on_click=lambda e: file_picker.save_file(file_name="backup_tienda.json")),
+            ft.IconButton(icon=ft.icons.DOWNLOAD, tooltip="Importar Backup", on_click=lambda e: file_picker.pick_files(allow_multiple=False, allowed_extensions=["json"])),
         ],
     )
 
     # --- LAYOUT PRINCIPAL ---
-    search_field = ft.TextField(
-        prefix_icon=ft.icons.SEARCH,
-        hint_text="Buscar producto...",
-        on_change=lambda e: cargar_productos(e.control.value),
-    )
+    search_field = ft.TextField(prefix_icon=ft.icons.SEARCH, hint_text="Buscar producto...", on_change=lambda e: cargar_productos(e.control.value))
 
-    page.add(
-        ft.Container(height=10),
-        ft.Row([tasa_cambio, ft.FloatingActionButton(icon=ft.icons.ADD, on_click=dialogo_agregar)], alignment=ft.MainAxisAlignment.CENTER),
-        ft.Divider(),
-        search_field,
-        lista_productos_view,
-    )
+    page.add(ft.Container(height=10),
+             ft.Row([tasa_cambio, ft.FloatingActionButton(icon=ft.icons.ADD, on_click=dialogo_agregar)], alignment=ft.MainAxisAlignment.CENTER),
+             ft.Divider(), search_field, lista_productos_view)
 
     # Inicializar lista
     cargar_productos()
+
+
+# --- wrapper seguro que captura excepciones y muestra/loggea el stacktrace ---
+def main(page: ft.Page):
+    try:
+        app_main(page)
+    except Exception:
+        tb = traceback.format_exc()
+        # intentar guardar log a archivo
+        try:
+            with open("error_log.txt", "w", encoding="utf-8") as f:
+                f.write(tb)
+        except Exception:
+            pass
+        # limpiar la página y mostrar el error para que puedas verlo en el teléfono
+        try:
+            page.controls.clear()
+        except Exception:
+            pass
+        page.add(ft.Column([
+            ft.Text("ERROR FATAL al iniciar la app", color="red", size=20),
+            ft.Text("Copia este mensaje y pégalo en la conversación para que pueda ayudarte:", size=12),
+            ft.Text(tb, size=10),
+            ft.ElevatedButton("Reiniciar app", on_click=lambda e: _reiniciar(page))
+        ]))
+        page.update()
+
+def _reiniciar(page: ft.Page):
+    # intenta reiniciar la app recargando la UI (llama a app_main otra vez en try/except)
+    try:
+        page.controls.clear()
+        page.update()
+        app_main(page)
+    except Exception:
+        tb = traceback.format_exc()
+        try:
+            with open("error_log.txt", "w", encoding="utf-8") as f:
+                f.write(tb)
+        except Exception:
+            pass
+        page.controls.clear()
+        page.add(ft.Text("No se pudo reiniciar. Revisa error_log.txt o pega el stacktrace aquí.", color="red"))
+        page.update()
+
+# Capturar excepciones globales que no pasen por el wrapper (por si acaso)
+def global_excepthook(exc_type, exc_value, exc_tb):
+    tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    try:
+        with open("error_log.txt", "w", encoding="utf-8") as f:
+            f.write(tb)
+    except Exception:
+        pass
+    # no podemos actualizar la UI aquí con seguridad (fuera del hilo), pero guardamos el log.
+    print("Unhandled exception:", tb)
+
+sys.excepthook = global_excepthook
 
 ft.app(target=main)
