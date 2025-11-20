@@ -6,12 +6,26 @@ import os
 import shutil
 
 def main(page: ft.Page):
-    page.title = "Gestor de Precios PRO"
+    # --- 1. CONFIGURACIÓN INICIAL ---
+    page.title = "Gestor de Precios"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.scroll = "adaptive"
+    page.padding = 10
 
-    # --- BASE DE DATOS ---
-    conn = sqlite3.connect("tienda.db", check_same_thread=False)
+    # --- 2. RUTA SEGURA PARA ANDROID ---
+    # Esto evita que la app crashee por no saber dónde guardar el archivo
+    try:
+        # Buscamos una carpeta donde SI tengamos permiso de escribir
+        ruta_base = page.client_storage.get("data_dir") 
+        if not ruta_base:
+            ruta_base = os.getcwd() # Fallback para PC
+        
+        ruta_db = os.path.join(ruta_base, "tienda.db")
+    except:
+        ruta_db = "tienda.db" # Fallback de emergencia
+
+    # --- 3. CONEXIÓN BASE DE DATOS (AHORA DENTRO DE MAIN) ---
+    conn = sqlite3.connect(ruta_db, check_same_thread=False)
     c = conn.cursor()
     c.execute("""CREATE TABLE IF NOT EXISTS productos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,109 +34,73 @@ def main(page: ft.Page):
                 img TEXT)""")
     conn.commit()
 
-    # --- UTILIDADES DE ARCHIVOS (FilePicker) ---
-    # Esto permite abrir y guardar archivos en el celular/PC
+    # --- SISTEMA DE ARCHIVOS (FilePicker) ---
     file_picker = ft.FilePicker()
     page.overlay.append(file_picker)
 
-    # --- LÓGICA PRO: IMPORTAR / EXPORTAR CON FOTOS ---
+    # --- VARIABLES GLOBALES DE LA UI ---
+    lista_productos_view = ft.Column()
+    tasa_cambio = ft.TextField(label="Tasa BCV", value="40", keyboard_type=ft.KeyboardType.NUMBER, width=100, text_align="center")
 
-    def guardar_archivo_json(e: ft.FilePickerResultEvent):
-        if e.path:
-            try:
-                c.execute("SELECT nombre, precio, img FROM productos")
-                productos_exportar = []
+    # --- LÓGICA DEL NEGOCIO ---
+
+    def cargar_productos(busqueda=""):
+        try:
+            lista_productos_view.controls.clear()
+            query = "SELECT * FROM productos WHERE nombre LIKE ?"
+            c.execute(query, (f"%{busqueda}%",))
+            
+            items = c.fetchall()
+            if not items:
+                lista_productos_view.controls.append(ft.Text("No hay productos. Pulsa (+) para agregar.", color="grey"))
+
+            for row in items:
+                id_p, nombre, precio, img = row
                 
-                for r in c.fetchall():
-                    nombre, precio, ruta_img = r
-                    img_data = None
-                    
-                    # Verificamos si es una imagen local (del teléfono) y si existe
-                    if ruta_img and not ruta_img.startswith("http"):
-                        try:
-                            if os.path.exists(ruta_img):
-                                with open(ruta_img, "rb") as image_file:
-                                    # AQUÍ OCURRE LA MAGIA: Convertimos foto a texto
-                                    img_data = base64.b64encode(image_file.read()).decode('utf-8')
-                        except:
-                            pass # Si falla la foto, se va sin foto
-
-                    item = {
-                        "nombre": nombre,
-                        "precio": precio,
-                        "img_path": ruta_img if ruta_img.startswith("http") else "local",
-                        "img_base64": img_data # Aquí va la foto codificada
-                    }
-                    productos_exportar.append(item)
+                lbl_res = ft.Text("Total: $0.00 | Bs: 0.00", size=12)
+                txt_cant = ft.TextField(label="#", width=60, height=40, content_padding=5, keyboard_type=ft.KeyboardType.NUMBER)
                 
-                with open(e.path, 'w', encoding='utf-8') as f:
-                    json.dump(productos_exportar, f, ensure_ascii=False)
+                # Función de cálculo
+                txt_cant.on_change = lambda e, p=precio, l=lbl_res, t=txt_cant: calcular(e, p, l, t)
                 
-                page.show_snack_bar(ft.SnackBar(content=ft.Text("✅ Copia de seguridad (con fotos) creada!")))
-            except Exception as ex:
-                page.show_snack_bar(ft.SnackBar(content=ft.Text(f"❌ Error: {ex}")))
-
-    def cargar_archivo_json(e: ft.FilePickerResultEvent):
-        if e.files:
-            try:
-                ruta = e.files[0].path
-                with open(ruta, 'r', encoding='utf-8') as f:
-                    datos = json.load(f)
+                # Imagen segura
+                src_img = "https://via.placeholder.com/150"
+                if img:
+                    src_img = img
                 
-                count = 0
-                # Carpeta donde guardaremos las fotos recuperadas en el nuevo teléfono
-                carpeta_fotos = os.path.join(os.getcwd(), "fotos_importadas")
-                os.makedirs(carpeta_fotos, exist_ok=True)
+                imagen_widget = ft.Image(src=src_img, width=70, height=70, fit=ft.ImageFit.COVER, border_radius=5,
+                                         error_content=ft.Icon(ft.icons.IMAGE_NOT_SUPPORTED))
 
-                for item in datos:
-                    ruta_final = item.get('img_path')
-                    
-                    # Si viene con foto codificada (Base64), hay que reconstruirla
-                    if item.get('img_base64'):
-                        nombre_limpio = "".join(x for x in item['nombre'] if x.isalnum()) # Quitar símbolos raros
-                        nueva_ruta = os.path.join(carpeta_fotos, f"{nombre_limpio}_{count}.jpg")
-                        
-                        # MAGIA INVERSA: De texto a archivo de imagen
-                        with open(nueva_ruta, "wb") as img_file:
-                            img_file.write(base64.b64decode(item['img_base64']))
-                        ruta_final = nueva_ruta
+                card = ft.Card(
+                    content=ft.Container(
+                        padding=10,
+                        content=ft.Column([
+                            ft.Row([
+                                imagen_widget,
+                                ft.Column([
+                                    ft.Text(nombre, weight="bold", size=16),
+                                    ft.Text(f"Ref: ${precio}", color="blue", weight="bold"),
+                                ], expand=True),
+                                ft.IconButton(icon=ft.icons.DELETE, icon_color="red", on_click=lambda e, i=id_p: borrar_producto(i))
+                            ]),
+                            ft.Row([txt_cant, lbl_res], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+                        ])
+                    )
+                )
+                lista_productos_view.controls.append(card)
+            page.update()
+        except Exception as e:
+            page.add(ft.Text(f"Error cargando lista: {e}", color="red"))
 
-                    # Guardar en base de datos
-                    c.execute("INSERT INTO productos (nombre, precio, img) VALUES (?, ?, ?)", 
-                              (item['nombre'], item['precio'], ruta_final))
-                    count += 1
-                
-                conn.commit()
-                cargar_productos()
-                page.show_snack_bar(ft.SnackBar(content=ft.Text(f"✅ Se importaron {count} productos y sus fotos!")))
-            except Exception as ex:
-                page.show_snack_bar(ft.SnackBar(content=ft.Text(f"❌ Error al importar: {ex}")))
-                # Insertamos los datos nuevos
-                count = 0
-                for item in datos:
-                    # Verificamos si ya existe para no duplicar (opcional)
-                    c.execute("INSERT INTO productos (nombre, precio, img) VALUES (?, ?, ?)", 
-                              (item['nombre'], item['precio'], item['img']))
-                    count += 1
-                conn.commit()
-                cargar_productos() # Refrescar pantalla
-                page.show_snack_bar(ft.SnackBar(content=ft.Text(f"✅ Se importaron {count} productos!")))
-            except Exception as ex:
-                page.show_snack_bar(ft.SnackBar(content=ft.Text(f"❌ Error al leer archivo: {ex}")))
-
-    # Conectamos los eventos del selector de archivos
-    file_picker.on_save_file = guardar_archivo_json
-    file_picker.on_result = cargar_archivo_json
-
-
-    # --- FUNCIONES DE LA APP (Igual que antes) ---
     def calcular(e, precio_usd, lbl_res, field_cant):
         try:
             cant = float(field_cant.value) if field_cant.value else 0
             tasa = float(tasa_cambio.value) if tasa_cambio.value else 0
-            lbl_res.value = f"Total: ${cant*precio_usd:.2f} | Bs: {cant*precio_usd*tasa:,.2f}"
+            total_usd = cant * precio_usd
+            total_bs = total_usd * tasa
+            lbl_res.value = f"Total: ${total_usd:.2f} | Bs: {total_bs:,.2f}"
             lbl_res.color = "green" if cant > 0 else "black"
-            lbl_res.weight = "bold" if cant > 0 else "normal"
+            lbl_res.weight = ft.FontWeight.BOLD if cant > 0 else ft.FontWeight.NORMAL
             page.update()
         except: pass
 
@@ -131,74 +109,108 @@ def main(page: ft.Page):
         conn.commit()
         cargar_productos()
 
-    lista_productos_view = ft.Column()
-    tasa_cambio = ft.TextField(label="Tasa BCV", value="40", keyboard_type="number", width=100)
+    # --- IMPORTAR / EXPORTAR ---
+    def guardar_archivo_json(e: ft.FilePickerResultEvent):
+        if e.path:
+            try:
+                c.execute("SELECT nombre, precio, img FROM productos")
+                productos_exportar = []
+                for r in c.fetchall():
+                    nombre, precio, ruta_img = r
+                    img_data = None
+                    if ruta_img and not ruta_img.startswith("http"):
+                        try:
+                            if os.path.exists(ruta_img):
+                                with open(ruta_img, "rb") as image_file:
+                                    img_data = base64.b64encode(image_file.read()).decode('utf-8')
+                        except: pass
+                    item = {"nombre": nombre, "precio": precio, "img_path": ruta_img if ruta_img.startswith("http") else "local", "img_base64": img_data}
+                    productos_exportar.append(item)
+                
+                with open(e.path, 'w', encoding='utf-8') as f:
+                    json.dump(productos_exportar, f, ensure_ascii=False)
+                page.show_snack_bar(ft.SnackBar(content=ft.Text("✅ Backup guardado!")))
+            except Exception as ex:
+                page.show_snack_bar(ft.SnackBar(content=ft.Text(f"Error: {ex}")))
 
-    def cargar_productos(busqueda=""):
-        lista_productos_view.controls.clear()
-        query = "SELECT * FROM productos WHERE nombre LIKE ?"
-        c.execute(query, (f"%{busqueda}%",))
-        for row in c.fetchall():
-            id_p, nombre, precio, img = row
-            lbl_res = ft.Text("Total: $0.00 | Bs: 0.00", size=12)
-            txt_cant = ft.TextField(label="#", width=60, height=40, content_padding=5, keyboard_type="number")
-            txt_cant.on_change = lambda e, p=precio, l=lbl_res, t=txt_cant: calcular(e, p, l, t)
-            
-            lista_productos_view.controls.append(
-                ft.Card(content=ft.Container(padding=10, content=ft.Column([
-                    ft.Row([
-                        ft.Image(src=img if img else "https://via.placeholder.com/80", width=60, height=60, fit="cover", border_radius=5),
-                        ft.Column([ft.Text(nombre, weight="bold"), ft.Text(f"${precio}", color="blue")], expand=True),
-                        ft.IconButton(icon=ft.icons.DELETE, icon_color="red", on_click=lambda e, i=id_p: borrar_producto(i))
-                    ]),
-                    ft.Row([txt_cant, lbl_res], alignment="spaceBetween")
-                ])))
-            )
-        page.update()
+    def cargar_archivo_json(e: ft.FilePickerResultEvent):
+        if e.files:
+            try:
+                ruta = e.files[0].path
+                with open(ruta, 'r', encoding='utf-8') as f:
+                    datos = json.load(f)
+                
+                # Carpeta segura para fotos importadas
+                carpeta_fotos = os.path.join(ruta_base, "fotos_importadas")
+                os.makedirs(carpeta_fotos, exist_ok=True)
+                
+                count = 0
+                for item in datos:
+                    ruta_final = item.get('img_path')
+                    if item.get('img_base64'):
+                        nombre_limpio = "".join(x for x in item['nombre'] if x.isalnum())
+                        nueva_ruta = os.path.join(carpeta_fotos, f"{nombre_limpio}_{count}.jpg")
+                        with open(nueva_ruta, "wb") as img_file:
+                            img_file.write(base64.b64decode(item['img_base64']))
+                        ruta_final = nueva_ruta
 
+                    c.execute("INSERT INTO productos (nombre, precio, img) VALUES (?, ?, ?)", (item['nombre'], item['precio'], ruta_final))
+                    count += 1
+                conn.commit()
+                cargar_productos()
+                page.show_snack_bar(ft.SnackBar(content=ft.Text(f"✅ {count} productos importados!")))
+            except Exception as ex:
+                page.show_snack_bar(ft.SnackBar(content=ft.Text(f"Error: {ex}")))
+
+    file_picker.on_save_file = guardar_archivo_json
+    file_picker.on_result = cargar_archivo_json
+
+    # --- DIALOGO DE AGREGAR ---
     def dialogo_agregar(e):
         def guardar(e):
             if vn.value and vp.value:
-                c.execute("INSERT INTO productos (nombre, precio, img) VALUES (?, ?, ?)", 
-                          (vn.value, float(vp.value), vi.value))
-                conn.commit()
-                dlg.open = False
-                page.update()
-                cargar_productos()
+                try:
+                    prec = float(vp.value)
+                    c.execute("INSERT INTO productos (nombre, precio, img) VALUES (?, ?, ?)", (vn.value, prec, vi.value))
+                    conn.commit()
+                    dlg.open = False
+                    page.update()
+                    cargar_productos()
+                except: pass
         
-        vn, vp, vi = ft.TextField(label="Nombre"), ft.TextField(label="Precio", keyboard_type="number"), ft.TextField(label="URL Imagen")
-        dlg = ft.AlertDialog(title=ft.Text("Nuevo"), content=ft.Column([vn, vp, vi], height=150), 
-                             actions=[ft.TextButton("Guardar", on_click=guardar)])
+        vn = ft.TextField(label="Nombre")
+        vp = ft.TextField(label="Precio ($)", keyboard_type=ft.KeyboardType.NUMBER)
+        vi = ft.TextField(label="URL Imagen (Opcional)")
+        
+        dlg = ft.AlertDialog(
+            title=ft.Text("Nuevo Producto"),
+            content=ft.Column([vn, vp, vi], height=180, tight=True),
+            actions=[ft.TextButton("Guardar", on_click=guardar)]
+        )
         page.dialog = dlg
         dlg.open = True
         page.update()
 
-    # --- BOTONES DE EXPORTAR / IMPORTAR ---
-    def clic_exportar(e):
-        file_picker.save_file(file_name="lista_precios.json", caption="Guardar lista de precios")
-    
-    def clic_importar(e):
-        file_picker.pick_files(allow_multiple=False, allowed_extensions=["json"], dialog_title="Selecciona el archivo json")
-
-    # --- BARRA SUPERIOR (APPBAR) ---
+    # --- ARMADO DE PANTALLA ---
     page.appbar = ft.AppBar(
         title=ft.Text("Mi Tienda"),
         bgcolor=ft.colors.BLUE_GREY_900,
         color="white",
         actions=[
-            ft.IconButton(icon=ft.icons.UPLOAD_FILE, tooltip="Exportar Lista", on_click=clic_exportar),
-            ft.IconButton(icon=ft.icons.DOWNLOAD_FOR_OFFLINE, tooltip="Importar Lista", on_click=clic_importar),
+            ft.IconButton(icon=ft.icons.UPLOAD, on_click=lambda e: file_picker.save_file(file_name="backup.json")),
+            ft.IconButton(icon=ft.icons.DOWNLOAD, on_click=lambda e: file_picker.pick_files(allow_multiple=False, allowed_extensions=["json"])),
         ]
     )
 
-    # --- CUERPO PRINCIPAL ---
     page.add(
-        ft.Row([tasa_cambio, ft.FloatingActionButton(icon=ft.icons.ADD, on_click=dialogo_agregar)], alignment="center"),
-        ft.TextField(prefix_icon=ft.icons.SEARCH, hint_text="Buscar...", on_change=lambda e: cargar_productos(e.control.value)),
+        ft.Container(height=10),
+        ft.Row([tasa_cambio, ft.FloatingActionButton(icon=ft.icons.ADD, on_click=dialogo_agregar)], alignment=ft.MainAxisAlignment.CENTER),
         ft.Divider(),
+        ft.TextField(prefix_icon=ft.icons.SEARCH, hint_text="Buscar...", on_change=lambda e: cargar_productos(e.control.value)),
         lista_productos_view
     )
+    
+    # Cargar inicial
     cargar_productos()
-
 
 ft.app(target=main)
