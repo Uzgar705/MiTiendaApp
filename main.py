@@ -3,7 +3,7 @@ import sqlite3
 import json
 import base64
 import os
-import shut
+import shutil
 
 def main(page: ft.Page):
     page.title = "Gestor de Precios PRO"
@@ -199,5 +199,6 @@ def main(page: ft.Page):
         lista_productos_view
     )
     cargar_productos()
+
 
 ft.app(target=main)
